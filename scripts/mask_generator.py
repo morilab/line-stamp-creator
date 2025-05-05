@@ -34,18 +34,30 @@ def flood_fill_background(arr, bg_color, threshold=30):
     return mask
 
 def create_mask(image_path, mask_path, threshold=30):
-    img = Image.open(image_path).convert('RGB')
-    arr = np.array(img)
+    img = Image.open(image_path)
+    if img.mode == 'RGBA':
+        arr = np.array(img)
+        # アルファ値が128未満のピクセルを背景とみなす
+        alpha = arr[..., 3]
+        bg_mask_alpha = (alpha < 128)
+        # RGB部分のみで背景色推定・Flood Fill
+        arr_rgb = arr[..., :3]
+    else:
+        arr_rgb = np.array(img.convert('RGB'))
+        bg_mask_alpha = None
     # 外周ピクセルの平均色を背景色とする
     border = 1
-    top = arr[:border, :, :]
-    bottom = arr[-border:, :, :]
-    left = arr[:, :border, :]
-    right = arr[:, -border:, :]
-    outer_pixels = np.concatenate([top, bottom, left, right], axis=None).reshape(-1, arr.shape[2])
+    top = arr_rgb[:border, :, :]
+    bottom = arr_rgb[-border:, :, :]
+    left = arr_rgb[:, :border, :]
+    right = arr_rgb[:, -border:, :]
+    outer_pixels = np.concatenate([top, bottom, left, right], axis=None).reshape(-1, arr_rgb.shape[2])
     bg_color = np.mean(outer_pixels, axis=0)
     # Flood Fillで背景領域を特定
-    bg_mask = flood_fill_background(arr, bg_color, threshold)
+    bg_mask = flood_fill_background(arr_rgb, bg_color, threshold)
+    # アルファ値による背景も統合
+    if bg_mask_alpha is not None:
+        bg_mask = np.logical_or(bg_mask, bg_mask_alpha).astype(np.uint8)
     # 背景以外を白（255）、背景を黒（0）
     mask = np.where(bg_mask==1, 0, 255).astype(np.uint8)
     mask_img = Image.fromarray(mask, mode='L')
@@ -216,7 +228,7 @@ def mark_centers_on_mask(mask_path, output_path):
         # 統合されたオブジェクトをラベリング
         combined_labeled, combined_num = label(combined_mask == 255, structure=structure)
         
-        # PILのImageDrawを使用してテキストを描画
+        # 枠線描画後にImage.fromarrayで画像を生成し、テキストのみImageDrawで描画
         out_img = Image.fromarray(arr_draw)
         draw = ImageDraw.Draw(out_img)
         
@@ -232,85 +244,97 @@ def mark_centers_on_mask(mask_path, output_path):
         
         # 青い枠を描画（統合されたオブジェクトに対して）
         bounding_box_list = []
+        valid_box_flags = []
+        # まず全てのバウンディングボックスをリストアップし、valid判定も行う
         for i in range(1, combined_num + 1):
-            # 統合されたオブジェクトの座標を取得
             y_coords, x_coords = np.where(combined_labeled == i)
             if len(y_coords) == 0:
                 continue
-            
-            # バウンディングボックスの座標を計算
             min_y, max_y = np.min(y_coords), np.max(y_coords)
             min_x, max_x = np.min(x_coords), np.max(x_coords)
-            
-            # 枠線の太さと余白
             line_width = 4
-            padding = 4  # オブジェクトからの余白
-            
-            # パディング込みのバウンディングボックス座標を記録
+            padding = 4
             box = (min_x - padding, min_y - padding, max_x + padding, max_y + padding)
             bounding_box_list.append(box)
-            
-            # 青枠のサイズを計算
-            width = (max_x + padding) - (min_x - padding)
-            height = (max_y + padding) - (min_y - padding)
-            
-            # 青枠の中心位置を計算
-            center_y = (min_y - padding + max_y + padding) // 2
-            center_x = (min_x - padding + max_x + padding) // 2
-            
-            # サイズを中心位置に表示
+            xw = box[2] - box[0]
+            yw = box[3] - box[1]
+            ratio = xw / yw if yw != 0 else 0
+            valid = 0.7 <= ratio <= 1.3
+            valid_box_flags.append(valid)
+        # 青枠を全て描画
+        for box in bounding_box_list:
+            min_x, min_y, max_x, max_y = box
+            line_width = 4
+            # 青枠
+            for w in range(line_width):
+                for x in range(min_x - w, max_x + w + 1):
+                    if 0 <= min_y - w < arr_draw.shape[0] and 0 <= x < arr_draw.shape[1]:
+                        arr_draw[min_y - w, x] = [0, 0, 255]
+                    if 0 <= max_y + w < arr_draw.shape[0] and 0 <= x < arr_draw.shape[1]:
+                        arr_draw[max_y + w, x] = [0, 0, 255]
+                for y in range(min_y - w, max_y + w + 1):
+                    if 0 <= y < arr_draw.shape[0] and 0 <= min_x - w < arr_draw.shape[1]:
+                        arr_draw[y, min_x - w] = [0, 0, 255]
+                    if 0 <= y < arr_draw.shape[0] and 0 <= max_x + w < arr_draw.shape[1]:
+                        arr_draw[y, max_x + w] = [0, 0, 255]
+        # validなものだけ水色枠を重ねて描画
+        for box, valid in zip(bounding_box_list, valid_box_flags):
+            if valid:
+                min_x, min_y, max_x, max_y = box
+                for x in range(min_x, max_x+1):
+                    if 0 <= min_y < arr_draw.shape[0] and 0 <= x < arr_draw.shape[1]:
+                        arr_draw[min_y, x] = [0, 255, 255]
+                    if 0 <= max_y < arr_draw.shape[0] and 0 <= x < arr_draw.shape[1]:
+                        arr_draw[max_y, x] = [0, 255, 255]
+                for y in range(min_y, max_y+1):
+                    if 0 <= y < arr_draw.shape[0] and 0 <= min_x < arr_draw.shape[1]:
+                        arr_draw[y, min_x] = [0, 255, 255]
+                    if 0 <= y < arr_draw.shape[0] and 0 <= max_x < arr_draw.shape[1]:
+                        arr_draw[y, max_x] = [0, 255, 255]
+        # 枠線描画後にImage.fromarrayで画像を生成し、テキストのみImageDrawで描画
+        out_img = Image.fromarray(arr_draw)
+        draw = ImageDraw.Draw(out_img)
+        # テキスト描画（青枠の中心にサイズ表示）
+        font_size = 32
+        try:
+            font = ImageFont.truetype("arial.ttf", size=font_size)
+        except:
+            font = ImageFont.load_default()
+            font = font.font_variant(size=font_size)
+        for box in bounding_box_list:
+            min_x, min_y, max_x, max_y = box
+            width = max_x - min_x
+            height = max_y - min_y
+            center_x = (min_x + max_x) // 2
+            center_y = (min_y + max_y) // 2
             text = f"({width},{height})"
-            # テキストのサイズを取得
             text_bbox = draw.textbbox((0, 0), text, font=font)
             text_width = text_bbox[2] - text_bbox[0]
             text_height = text_bbox[3] - text_bbox[1]
-            
-            # テキストの位置を計算（中央揃え）
             text_x = center_x - text_width // 2
             text_y = center_y - text_height // 2
-            
-            # テキストを描画（青色に変更）
             draw.text((text_x, text_y), text, fill=(0, 0, 255), font=font)
-            
-            # 枠線を描画（青）
-            for w in range(line_width):
-                # 上辺
-                for x in range(min_x - padding - w, max_x + padding + w + 1):
-                    if 0 <= min_y - padding - w < arr_draw.shape[0] and 0 <= x < arr_draw.shape[1]:
-                        arr_draw[min_y - padding - w, x] = [0, 0, 255]
-                # 下辺
-                for x in range(min_x - padding - w, max_x + padding + w + 1):
-                    if 0 <= max_y + padding + w < arr_draw.shape[0] and 0 <= x < arr_draw.shape[1]:
-                        arr_draw[max_y + padding + w, x] = [0, 0, 255]
-                # 左辺
-                for y in range(min_y - padding - w, max_y + padding + w + 1):
-                    if 0 <= y < arr_draw.shape[0] and 0 <= min_x - padding - w < arr_draw.shape[1]:
-                        arr_draw[y, min_x - padding - w] = [0, 0, 255]
-                # 右辺
-                for y in range(min_y - padding - w, max_y + padding + w + 1):
-                    if 0 <= y < arr_draw.shape[0] and 0 <= max_x + padding + w < arr_draw.shape[1]:
-                        arr_draw[y, max_x + padding + w] = [0, 0, 255]
-            
-            # 枠線を描画した後、テキストを再描画
-            out_img = Image.fromarray(arr_draw)
-            draw = ImageDraw.Draw(out_img)
-            draw.text((text_x, text_y), text, fill=(0, 0, 255), font=font)
-            arr_draw = np.array(out_img)
         
         out_img.save(output_path)
         print(f'\nSaved: {output_path}')
-        return bounding_box_list
+        return bounding_box_list, valid_box_flags
     except Exception as e:
         print(f"Error in mark_centers_on_mask: {e}")
 
-def extract_bounding_box_segments(image_path, mask_path, bounding_box_list, output_path_prefix):
+def extract_bounding_box_segments(image_path, mask_path, bounding_box_list, valid_box_flags, output_path_prefix):
     """
-    青枠のバウンディングボックス座標リストを受け取り、
+    青枠のバウンディングボックス座標リストと有効フラグを受け取り、
     切り出し→リサイズ→透明化→保存（左上から右下の順）
     """
     img = Image.open(image_path).convert('RGBA')
     mask = Image.open(mask_path).convert('L')
-    boxes = bounding_box_list
+    # 出力前に既存の-1.png～-9.pngを削除
+    for i in range(1, 10):
+        del_path = f"{output_path_prefix}-{i}.png"
+        if os.path.exists(del_path):
+            os.remove(del_path)
+    # 有効なボックスのみ抽出
+    boxes = [box for box, valid in zip(bounding_box_list, valid_box_flags) if valid]
     # 面積でソートして上位9個を取得
     areas = [(i, (x2-x1)*(y2-y1)) for i, (x1, y1, x2, y2) in enumerate(boxes)]
     top9 = sorted(areas, key=lambda x: x[1], reverse=True)[:9]
@@ -355,6 +379,6 @@ if __name__ == '__main__':
             # マスク生成
             create_mask(input_path, mask_path)
             # 青枠描画＋座標リスト取得
-            bounding_box_list = mark_centers_on_mask(mask_path, bounding_path)
+            bounding_box_list, valid_box_flags = mark_centers_on_mask(mask_path, bounding_path)
             # 青枠領域の切り出し
-            extract_bounding_box_segments(input_path, mask_path, bounding_box_list, output_prefix) 
+            extract_bounding_box_segments(input_path, mask_path, bounding_box_list, valid_box_flags, output_prefix) 
