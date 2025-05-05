@@ -259,7 +259,7 @@ def mark_centers_on_mask(mask_path, output_path):
             xw = box[2] - box[0]
             yw = box[3] - box[1]
             ratio = xw / yw if yw != 0 else 0
-            valid = 0.7 <= ratio <= 1.3
+            valid = 0.7 <= ratio <= 1.3 and xw <= 500 and yw <= 500
             valid_box_flags.append(valid)
         # 青枠を全て描画
         for box in bounding_box_list:
