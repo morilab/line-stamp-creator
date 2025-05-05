@@ -1,0 +1,13 @@
+# Zone.Identifier（Windowsの付加情報ファイル）を無視
+*.Zone.Identifier
+*:*Zone.Identifier
+**/*.Zone.Identifier
+**/*:*Zone.Identifier
+
+# Python仮想環境を無視
+.venv/
+
+#outputフォルダ内のpngファイルを無視
+output/*.png
+
+__pycache__/

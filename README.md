@@ -5,6 +5,28 @@ LINEスタンプを作成するためのプロジェクトです。
 ## 概要
 
 このプロジェクトは、LINEスタンプの作成を支援するツールを提供します。
+また、Cursor Pro版によりプロジェクトを作成しています。
+
+## 環境構築
+
+1. Python 3.8以降をインストールしてください。
+2. プロジェクトディレクトリで仮想環境を作成します。
+   ```sh
+   python3 -m venv .venv
+   ```
+3. 仮想環境を有効化します。
+   - Linux/macOS:
+     ```sh
+     source .venv/bin/activate
+     ```
+   - Windows:
+     ```sh
+     .venv\Scripts\activate
+     ```
+4. 依存パッケージをインストールします。
+   ```sh
+   pip install -r requirements.txt
+   ```
 
 ## 機能（予定）
 
@@ -31,5 +53,6 @@ LINEスタンプを作成するためのプロジェクトです。
 - トークンは他人に絶対に教えない。
 - 万が一漏洩した場合や不要になった場合は、GitHubの「Personal access tokens」画面から削除（Revoke/Delete）する。
 - 必要に応じていつでも新しいPATを発行できる。
+- cursorはWSL側のgitではなくPowerShell側のgitから操作しているので注意。
 
 --- 
