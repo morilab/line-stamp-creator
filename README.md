@@ -4,8 +4,20 @@ LINEスタンプを作成するためのプロジェクトです。
 
 ## 概要
 
+### 1. LINEスタンプ作成支援
 このプロジェクトは、LINEスタンプの作成を支援するツールを提供します。
-また、Cursor Pro版によりプロジェクトを作成しています。
+OpenAIの画像生成APIを使用して画像を生成し、自動的に分割・リサイズしてLINEスタンプ用の画像を作成します。
+
+### 2. AI活用の実践例
+本プロジェクトは、以下のAI技術を活用した実践例としても位置づけています：
+
+- **[OpenAI](https://openai.com/)画像生成API**
+  - プロンプト設計による高品質な画像生成
+  - キャラクターやシーンの一貫性を保持
+
+- **[Cursor Pro](https://cursor.sh/)のAIアシスタント**
+  - プロンプト設計、コード生成、ドキュメント作成まで一貫したサポート
+  - 手動での実装を最小限に抑えた効率的な開発
 
 ## 環境構築
 
@@ -31,35 +43,62 @@ LINEスタンプを作成するためのプロジェクトです。
 ## 実行手順
 
 1. 必要なパッケージをインストール（初回のみ）
-
 ```bash
 python -m venv .venv
 source .venv/bin/activate  # Windowsの場合は .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-2. `input`フォルダに処理したいPNG画像をすべて配置します。
+2. プロンプト設定ファイルを編集
+- `input/global_config.yaml`: 全体の画風や条件
+- `input/character_config.yaml`: キャラクターの特徴
+- `input/scenes_config.yaml`: 各シーンの構図やセリフ
 
-3. スクリプトを実行します。
+3. OpenAI APIキーを設定
+```bash
+cp .env.example .env
+# .envファイルを編集してOPENAI_API_KEYを設定
+```
 
+4. 画像を生成
+```bash
+python openai_image_gen.py
+```
+生成された画像は`output/generated/`に保存されます。
+
+5. 画像を分割
 ```bash
 python scripts/mask_generator.py
 ```
 
-4. `output`フォルダ内に、各画像ごとに
-   - マスク画像（`*_mask.png`）
-   - 青枠付き画像（`*_bounding.png`）
-   - 切り出し済みスタンプ画像（`*-1.png` ～ `*-9.png`）
-が自動生成されます。
+6. 分割された画像は`output/`直下に保存されます。
+- `output/`直下: 分割済みスタンプ画像（`*-1.png` ～ `*-9.png`）
+- `output/masks/`: マスク画像（`*_mask.png`）
+- `output/bounding/`: 青枠付き画像（`*_bounding.png`）
 
----
+## フォルダ構成
 
-- 画像サイズや透明化、分割方法はLINEスタンプの仕様に準拠しています。
+```
+.
+├── input/
+│   ├── global_config.yaml    # 全体の画風や条件
+│   ├── character_config.yaml # キャラクターの特徴
+│   └── scenes_config.yaml    # 各シーンの構図やセリフ
+├── output/
+│   ├── generated/           # OpenAIで生成された画像
+│   ├── masks/              # マスク画像（参考用）
+│   ├── bounding/           # バウンディングボックス画像（参考用）
+│   └── *.png              # 分割済みスタンプ画像
+├── scripts/
+│   └── mask_generator.py   # 画像分割スクリプト
+└── openai_image_gen.py     # 画像生成スクリプト
+```
 
 ## 機能
 
 - 入力画像（PNG）から自動で背景除去マスクを生成
 - マスク画像から主なオブジェクトを検出し、青枠（バウンディングボックス）を描画
+- 青枠を全て描画。validなものだけ黄色枠を重ねて描画
 - 青枠領域を元画像・マスク画像から切り出し、LINEスタンプ規格（最大370x320）にリサイズ
 - マスクの黒部分を透明化し、スタンプ画像として出力
 - inputフォルダ内の全PNG画像を一括処理
@@ -80,6 +119,7 @@ python scripts/mask_generator.py
 - 各ラベルごとにバウンディングボックス（最小矩形）を計算し、パディングを加えた範囲を青枠として描画します。
 - 面積の大きい順に9個のバウンディングボックスを選び、左上から右下の順（y座標→x座標昇順）で並べて出力します。
 - バウンディングボックスの幅または高さが500pxを超える場合は出力対象外となります。
+- validなバウンディングボックスは黄色枠で強調されます。
 
 例：  
 ![バウンディングボックス画像の例](docs/images/image_3x3_001_bounding.png)

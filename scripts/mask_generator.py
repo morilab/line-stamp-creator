@@ -4,64 +4,126 @@ from collections import deque
 from scipy.ndimage import label, center_of_mass
 import math
 import os
+import logging
+import sys
+from typing import List, Tuple, Optional
 
-def flood_fill_background(arr, bg_color, threshold=30):
-    h, w, c = arr.shape
-    mask = np.zeros((h, w), dtype=np.uint8)  # 0: 未処理, 1: 背景
-    visited = np.zeros((h, w), dtype=bool)
-    queue = deque()
-    # 外周ピクセルをキューに追加
-    for x in range(w):
-        queue.append((0, x))
-        queue.append((h-1, x))
-    for y in range(h):
-        queue.append((y, 0))
-        queue.append((y, w-1))
-    # Flood Fill
-    while queue:
-        y, x = queue.popleft()
-        if visited[y, x]:
-            continue
-        visited[y, x] = True
-        color = arr[y, x]
-        if np.linalg.norm(color - bg_color) <= threshold:
-            mask[y, x] = 1  # 背景
-            # 4近傍
-            for dy, dx in [(-1,0),(1,0),(0,-1),(0,1)]:
-                ny, nx = y+dy, x+dx
-                if 0<=ny<h and 0<=nx<w and not visited[ny, nx]:
-                    queue.append((ny, nx))
-    return mask
+# ロギングの設定
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler('mask_generator.log')
+    ]
+)
+logger = logging.getLogger(__name__)
 
-def create_mask(image_path, mask_path, threshold=30):
-    img = Image.open(image_path)
-    if img.mode == 'RGBA':
-        arr = np.array(img)
-        # アルファ値が128未満のピクセルを背景とみなす
-        alpha = arr[..., 3]
-        bg_mask_alpha = (alpha < 128)
-        # RGB部分のみで背景色推定・Flood Fill
-        arr_rgb = arr[..., :3]
-    else:
-        arr_rgb = np.array(img.convert('RGB'))
-        bg_mask_alpha = None
-    # 外周ピクセルの平均色を背景色とする
-    border = 1
-    top = arr_rgb[:border, :, :]
-    bottom = arr_rgb[-border:, :, :]
-    left = arr_rgb[:, :border, :]
-    right = arr_rgb[:, -border:, :]
-    outer_pixels = np.concatenate([top, bottom, left, right], axis=None).reshape(-1, arr_rgb.shape[2])
-    bg_color = np.mean(outer_pixels, axis=0)
-    # Flood Fillで背景領域を特定
-    bg_mask = flood_fill_background(arr_rgb, bg_color, threshold)
-    # アルファ値による背景も統合
-    if bg_mask_alpha is not None:
-        bg_mask = np.logical_or(bg_mask, bg_mask_alpha).astype(np.uint8)
-    # 背景以外を白（255）、背景を黒（0）
-    mask = np.where(bg_mask==1, 0, 255).astype(np.uint8)
-    mask_img = Image.fromarray(mask, mode='L')
-    mask_img.save(mask_path)
+def validate_image(image_path: str) -> bool:
+    """画像ファイルの存在と形式を検証"""
+    if not os.path.exists(image_path):
+        logger.error(f"File not found: {image_path}")
+        return False
+    
+    try:
+        with Image.open(image_path) as img:
+            if img.format not in ['PNG', 'JPEG']:
+                logger.error(f"Unsupported image format: {img.format}")
+                return False
+            if img.mode not in ['RGB', 'RGBA']:
+                logger.error(f"Unsupported color mode: {img.mode}")
+                return False
+    except Exception as e:
+        logger.error(f"Error validating image {image_path}: {str(e)}")
+        return False
+    
+    return True
+
+def flood_fill_background(arr: np.ndarray, bg_color: np.ndarray, alpha: Optional[np.ndarray] = None, threshold: int = 30) -> np.ndarray:
+    """背景のFlood Fill処理（アルファ値が低い部分は常に背景とみなす）"""
+    try:
+        h, w, c = arr.shape
+        mask = np.zeros((h, w), dtype=np.uint8)
+        visited = np.zeros((h, w), dtype=bool)
+        queue = deque()
+        
+        # 外周ピクセルをキューに追加
+        for x in range(w):
+            if alpha is not None and alpha[0, x] < 128:
+                continue
+            queue.append((0, x))
+            if alpha is not None and alpha[h-1, x] < 128:
+                continue
+            queue.append((h-1, x))
+        for y in range(h):
+            if alpha is not None and alpha[y, 0] < 128:
+                continue
+            queue.append((y, 0))
+            if alpha is not None and alpha[y, w-1] < 128:
+                continue
+            queue.append((y, w-1))
+        
+        # Flood Fill
+        while queue:
+            y, x = queue.popleft()
+            if visited[y, x]:
+                continue
+            visited[y, x] = True
+            # アルファ値が低い場合は常に背景
+            if alpha is not None and alpha[y, x] < 128:
+                mask[y, x] = 1
+                continue
+            color = arr[y, x]
+            if np.linalg.norm(color - bg_color) <= threshold:
+                mask[y, x] = 1
+                for dy, dx in [(-1,0),(1,0),(0,-1),(0,1)]:
+                    ny, nx = y+dy, x+dx
+                    if 0<=ny<h and 0<=nx<w and not visited[ny, nx]:
+                        # 進行先もアルファ値128以上のみ
+                        if alpha is not None and alpha[ny, nx] < 128:
+                            continue
+                        queue.append((ny, nx))
+        return mask
+    except Exception as e:
+        logger.error(f"Error in flood_fill_background: {str(e)}")
+        raise
+
+def create_mask(image_path: str, mask_path: str, threshold: int = 30) -> None:
+    """マスク画像の生成（RGBA画像の透明部分は白で埋めてから処理）"""
+    try:
+        if not validate_image(image_path):
+            return
+
+        img = Image.open(image_path)
+        if img.mode == 'RGBA':
+            arr = np.array(img)
+            alpha = arr[..., 3]
+            arr_rgb = arr[..., :3].copy()
+            # 透明部分（アルファ値128未満）を白で埋める
+            arr_rgb[alpha < 128] = [255, 255, 255]
+        else:
+            arr_rgb = np.array(img.convert('RGB'))
+
+        # 外周ピクセルの平均色を背景色とする
+        border = 1
+        top = arr_rgb[:border, :, :]
+        bottom = arr_rgb[-border:, :, :]
+        left = arr_rgb[:, :border, :]
+        right = arr_rgb[:, -border:, :]
+        outer_pixels = np.concatenate([top, bottom, left, right], axis=None).reshape(-1, arr_rgb.shape[2])
+        bg_color = np.mean(outer_pixels, axis=0)
+
+        # Flood Fillで背景領域を特定
+        bg_mask = flood_fill_background(arr_rgb, bg_color, alpha=None, threshold=threshold)
+
+        # 背景以外を白（255）、背景を黒（0）
+        mask = np.where(bg_mask == 0, 255, 0).astype(np.uint8)
+        mask_img = Image.fromarray(mask, mode='L')
+        mask_img.save(mask_path)
+        logger.info(f"Created mask: {mask_path}")
+    except Exception as e:
+        logger.error(f"Error in create_mask: {str(e)}")
+        raise
 
 def draw_bounding_box(arr_draw, labeled, object_id, color, line_width=2):
     # オブジェクトの座標を取得
@@ -283,14 +345,14 @@ def mark_centers_on_mask(mask_path, output_path):
                 min_x, min_y, max_x, max_y = box
                 for x in range(min_x, max_x+1):
                     if 0 <= min_y < arr_draw.shape[0] and 0 <= x < arr_draw.shape[1]:
-                        arr_draw[min_y, x] = [0, 255, 255]
+                        arr_draw[min_y, x] = [255, 255, 0]  # 黄色
                     if 0 <= max_y < arr_draw.shape[0] and 0 <= x < arr_draw.shape[1]:
-                        arr_draw[max_y, x] = [0, 255, 255]
+                        arr_draw[max_y, x] = [255, 255, 0]  # 黄色
                 for y in range(min_y, max_y+1):
                     if 0 <= y < arr_draw.shape[0] and 0 <= min_x < arr_draw.shape[1]:
-                        arr_draw[y, min_x] = [0, 255, 255]
+                        arr_draw[y, min_x] = [255, 255, 0]  # 黄色
                     if 0 <= y < arr_draw.shape[0] and 0 <= max_x < arr_draw.shape[1]:
-                        arr_draw[y, max_x] = [0, 255, 255]
+                        arr_draw[y, max_x] = [255, 255, 0]  # 黄色
         # 枠線描画後にImage.fromarrayで画像を生成し、テキストのみImageDrawで描画
         out_img = Image.fromarray(arr_draw)
         draw = ImageDraw.Draw(out_img)
@@ -321,64 +383,129 @@ def mark_centers_on_mask(mask_path, output_path):
     except Exception as e:
         print(f"Error in mark_centers_on_mask: {e}")
 
-def extract_bounding_box_segments(image_path, mask_path, bounding_box_list, valid_box_flags, output_path_prefix):
-    """
-    青枠のバウンディングボックス座標リストと有効フラグを受け取り、
-    切り出し→リサイズ→透明化→保存（左上から右下の順）
-    """
-    img = Image.open(image_path).convert('RGBA')
-    mask = Image.open(mask_path).convert('L')
-    # 出力前に既存の-1.png～-9.pngを削除
-    for i in range(1, 10):
-        del_path = f"{output_path_prefix}-{i}.png"
-        if os.path.exists(del_path):
-            os.remove(del_path)
-    # 有効なボックスのみ抽出
-    boxes = [box for box, valid in zip(bounding_box_list, valid_box_flags) if valid]
-    # 面積でソートして上位9個を取得
-    areas = [(i, (x2-x1)*(y2-y1)) for i, (x1, y1, x2, y2) in enumerate(boxes)]
-    top9 = sorted(areas, key=lambda x: x[1], reverse=True)[:9]
-    top9_indices = [x[0] for x in top9]
-    top9_boxes = [boxes[i] for i in top9_indices]
-    # 左上から右下の順（y1,x1昇順）
-    top9_boxes = sorted(top9_boxes, key=lambda box: (box[1], box[0]))
-    MAX_WIDTH = 370
-    MAX_HEIGHT = 320
-    for idx, (x1, y1, x2, y2) in enumerate(top9_boxes):
-        # 元画像・マスク画像から切り出し
-        segment = img.crop((x1, y1, x2+1, y2+1))
-        segment_mask = mask.crop((x1, y1, x2+1, y2+1))
-        # リサイズ（アスペクト比保持）
-        if segment.width > MAX_WIDTH or segment.height > MAX_HEIGHT:
-            ratio = min(MAX_WIDTH / segment.width, MAX_HEIGHT / segment.height)
-            new_width = int(segment.width * ratio)
-            new_height = int(segment.height * ratio)
-            segment = segment.resize((new_width, new_height), Image.Resampling.LANCZOS)
-            segment_mask = segment_mask.resize((new_width, new_height), Image.Resampling.LANCZOS)
-        # マスクの黒部分を透明化
-        segment_array = np.array(segment)
-        mask_array = np.array(segment_mask)
-        segment_array[mask_array == 0, 3] = 0
-        segment = Image.fromarray(segment_array)
-        # 保存
-        output_path = f"{output_path_prefix}-{idx+1}.png"
-        segment.save(output_path, "PNG")
-        print(f"Saved: {output_path}")
+def extract_bounding_box_segments(
+    image_path: str,
+    mask_path: str,
+    bounding_box_list: List[Tuple[int, int, int, int]],
+    valid_box_flags: List[bool],
+    output_path_prefix: str
+) -> None:
+    """バウンディングボックス領域の切り出しと保存"""
+    try:
+        # 入力画像のみ検証（マスク画像は自作なので検証不要）
+        if not validate_image(image_path):
+            return
+
+        img = Image.open(image_path).convert('RGBA')
+        mask = Image.open(mask_path).convert('L')
+
+        # 出力前に既存の-1.png～-9.pngを削除
+        for i in range(1, 10):
+            del_path = f"{output_path_prefix}-{i}.png"
+            if os.path.exists(del_path):
+                os.remove(del_path)
+                logger.debug(f"Removed existing file: {del_path}")
+
+        # 有効なボックスのみ抽出
+        boxes = [box for box, valid in zip(bounding_box_list, valid_box_flags) if valid]
+        if not boxes:
+            logger.warning("No valid bounding boxes found")
+            return
+
+        # 面積でソートして上位9個を取得
+        areas = [(i, (x2-x1)*(y2-y1)) for i, (x1, y1, x2, y2) in enumerate(boxes)]
+        top9 = sorted(areas, key=lambda x: x[1], reverse=True)[:9]
+        top9_indices = [x[0] for x in top9]
+        top9_boxes = [boxes[i] for i in top9_indices]
+
+        # 左上から右下の順（y1,x1昇順）
+        top9_boxes = sorted(top9_boxes, key=lambda box: (box[1], box[0]))
+
+        MAX_WIDTH = 370
+        MAX_HEIGHT = 320
+
+        for idx, (x1, y1, x2, y2) in enumerate(top9_boxes):
+            try:
+                # 元画像・マスク画像から切り出し
+                segment = img.crop((x1, y1, x2+1, y2+1))
+                segment_mask = mask.crop((x1, y1, x2+1, y2+1))
+
+                # リサイズ（アスペクト比保持）
+                if segment.width > MAX_WIDTH or segment.height > MAX_HEIGHT:
+                    ratio = min(MAX_WIDTH / segment.width, MAX_HEIGHT / segment.height)
+                    new_width = int(segment.width * ratio)
+                    new_height = int(segment.height * ratio)
+                    segment = segment.resize((new_width, new_height), Image.Resampling.LANCZOS)
+                    segment_mask = segment_mask.resize((new_width, new_height), Image.Resampling.LANCZOS)
+
+                # マスクの黒部分を透明化
+                segment_array = np.array(segment)
+                mask_array = np.array(segment_mask)
+                segment_array[mask_array == 0, 3] = 0
+                segment = Image.fromarray(segment_array)
+
+                # 保存
+                output_path = f"{output_path_prefix}-{idx+1}.png"
+                segment.save(output_path, "PNG")
+                logger.info(f"Saved segment {idx+1}: {output_path}")
+
+            except Exception as e:
+                logger.error(f"Error processing segment {idx+1}: {str(e)}")
+                continue
+
+    except Exception as e:
+        logger.error(f"Error in extract_bounding_box_segments: {str(e)}")
+        raise
 
 if __name__ == '__main__':
-    # inputフォルダ内のすべてのPNGファイルを処理
-    input_dir = 'input'
-    output_dir = 'output'
-    for filename in os.listdir(input_dir):
-        if filename.lower().endswith('.png'):
-            base = os.path.splitext(filename)[0]
-            input_path = os.path.join(input_dir, filename)
-            mask_path = os.path.join(output_dir, f'{base}_mask.png')
-            bounding_path = os.path.join(output_dir, f'{base}_bounding.png')
-            output_prefix = os.path.join(output_dir, base)
-            # マスク生成
-            create_mask(input_path, mask_path)
-            # 青枠描画＋座標リスト取得
-            bounding_box_list, valid_box_flags = mark_centers_on_mask(mask_path, bounding_path)
-            # 青枠領域の切り出し
-            extract_bounding_box_segments(input_path, mask_path, bounding_box_list, valid_box_flags, output_prefix) 
+    try:
+        # ディレクトリ構造の設定
+        input_dir = os.path.join('output', 'generated')
+        output_dir = 'output'
+        mask_dir = os.path.join('output', 'masks')
+        bounding_dir = os.path.join('output', 'bounding')
+
+        # 必要なディレクトリを作成
+        for dir_path in [mask_dir, bounding_dir]:
+            os.makedirs(dir_path, exist_ok=True)
+            logger.info(f"Ensured directory exists: {dir_path}")
+
+        # 入力ディレクトリの存在確認
+        if not os.path.exists(input_dir):
+            logger.error(f"Input directory not found: {input_dir}")
+            sys.exit(1)
+
+        # output/generatedフォルダ内のすべてのPNGファイルを処理
+        png_files = [f for f in os.listdir(input_dir) if f.lower().endswith('.png')]
+        if not png_files:
+            logger.warning(f"No PNG files found in {input_dir}")
+            sys.exit(0)
+
+        for filename in png_files:
+            try:
+                base = os.path.splitext(filename)[0]
+                input_path = os.path.join(input_dir, filename)
+                mask_path = os.path.join(mask_dir, f'{base}_mask.png')
+                bounding_path = os.path.join(bounding_dir, f'{base}_bounding.png')
+                output_prefix = os.path.join(output_dir, base)
+
+                logger.info(f"\nProcessing: {filename}")
+                logger.info(f"Input: {input_path}")
+                logger.info(f"Mask: {mask_path}")
+                logger.info(f"Bounding: {bounding_path}")
+                logger.info(f"Output prefix: {output_prefix}")
+
+                # マスク生成
+                create_mask(input_path, mask_path)
+                # 青枠描画＋座標リスト取得
+                bounding_box_list, valid_box_flags = mark_centers_on_mask(mask_path, bounding_path)
+                # 青枠領域の切り出し
+                extract_bounding_box_segments(input_path, mask_path, bounding_box_list, valid_box_flags, output_prefix)
+
+            except Exception as e:
+                logger.error(f"Error processing {filename}: {str(e)}")
+                continue
+
+    except Exception as e:
+        logger.error(f"Fatal error: {str(e)}")
+        sys.exit(1) 

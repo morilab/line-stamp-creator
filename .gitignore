@@ -3,11 +3,16 @@
 *:*Zone.Identifier
 **/*.Zone.Identifier
 **/*:*Zone.Identifier
-
-# Python仮想環境を無視
+# Python関連
+__pycache__/
 .venv/
+
+# ログファイルその他
+*.log
 
 #outputフォルダ内のpngファイルを無視
 output/*.png
+output/bounding/*.png
+output/masks/*.png
 
-__pycache__/
+
