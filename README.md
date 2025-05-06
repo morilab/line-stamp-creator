@@ -202,7 +202,11 @@ python scripts/openai_image_gen.py --scenes input/scenes-006.yaml --model dall-e
 ### 注意事項
 - **モデルの変更は可能ですが、DALLE3の場合は3x3マトリックス配置や細かな指示がうまく反映されないことが多いです。**
 - **gpt-image-1は高額な課金が発生するため、基本的には本番用・高品質生成用とし、動作確認やテストにはdall-e-3の利用を推奨します。**
+- **dall-e-2はプロンプトが1000文字までという制限があり、長いプロンプトではエラーになります。**
 - 本番運用や高品質な画像生成には`gpt-image-1`などの最新モデルを推奨します。
+
+#### 【参考】DALLE3では意図通りの画像が出ない例
+![DALLE3失敗例](output/generated/image_3x3_DALLE3.png)
 
 ### 設定ファイルの役割
 - `input/global_config.yaml` : 全体の画風や共通条件

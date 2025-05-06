@@ -30,18 +30,34 @@ def generate_image(prompt, output_path, model="dall-e-3"):
             n=1,
             size="1024x1024"
         )
+        # レスポンスの型や主要情報をログに記録（b64_json本体は出さない）
+        logger.info(f"OpenAI API response type: {type(response)}; keys: {list(response.data[0].__dict__.keys()) if hasattr(response.data[0], '__dict__') else dir(response.data[0])}")
         image_url = getattr(response.data[0], 'url', None)
-        if not image_url:
-            logger.error(f"No image URL returned from OpenAI API. Response: {response}")
+        b64_json = getattr(response.data[0], 'b64_json', None)
+        if image_url:
+            # 画像をダウンロードして保存
+            import requests
+            img_data = requests.get(image_url).content
+            with open(output_path, 'wb') as f:
+                f.write(img_data)
+            logger.info(f"Saved: {output_path} (from url)")
+        elif b64_json:
+            import base64
+            img_data = base64.b64decode(b64_json)
+            with open(output_path, 'wb') as f:
+                f.write(img_data)
+            logger.info(f"Saved: {output_path} (from b64_json, length={len(b64_json)})")
+        else:
+            logger.error(f"No image URL or b64_json returned from OpenAI API. Response keys: {list(response.data[0].__dict__.keys()) if hasattr(response.data[0], '__dict__') else dir(response.data[0])}")
             return
-        # 画像をダウンロードして保存
-        import requests
-        img_data = requests.get(image_url).content
-        with open(output_path, 'wb') as f:
-            f.write(img_data)
-        logger.info(f"Saved: {output_path}")
     except Exception as e:
+        # openai.BadRequestErrorなどのAPI例外は内容を詳細に記録
         logger.error(f"Error in generate_image: {str(e)}")
+        if hasattr(e, 'response'):
+            try:
+                logger.error(f"OpenAI API error response: {e.response.text}")
+            except Exception:
+                pass
         raise
 
 def load_yaml(yaml_path):
