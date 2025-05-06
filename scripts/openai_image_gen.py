@@ -3,6 +3,19 @@ import openai
 from dotenv import load_dotenv
 import argparse
 import yaml
+import logging
+import sys
+
+# ロギングの設定
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler('openai_image_gen.log')
+    ]
+)
+logger = logging.getLogger(__name__)
 
 # .envからAPIキーを読み込む（環境変数でもOK）
 load_dotenv()
@@ -10,19 +23,26 @@ OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 openai.api_key = OPENAI_API_KEY
 
 def generate_image(prompt, output_path, model="dall-e-3"):
-    response = openai.images.generate(
-        model=model,
-        prompt=prompt,
-        n=1,
-        size="1024x1024"
-    )
-    image_url = response.data[0].url
-    # 画像をダウンロードして保存
-    import requests
-    img_data = requests.get(image_url).content
-    with open(output_path, 'wb') as f:
-        f.write(img_data)
-    print(f"Saved: {output_path}")
+    try:
+        response = openai.images.generate(
+            model=model,
+            prompt=prompt,
+            n=1,
+            size="1024x1024"
+        )
+        image_url = getattr(response.data[0], 'url', None)
+        if not image_url:
+            logger.error(f"No image URL returned from OpenAI API. Response: {response}")
+            return
+        # 画像をダウンロードして保存
+        import requests
+        img_data = requests.get(image_url).content
+        with open(output_path, 'wb') as f:
+            f.write(img_data)
+        logger.info(f"Saved: {output_path}")
+    except Exception as e:
+        logger.error(f"Error in generate_image: {str(e)}")
+        raise
 
 def load_yaml(yaml_path):
     with open(yaml_path, 'r', encoding='utf-8') as f:
@@ -71,6 +91,9 @@ if __name__ == "__main__":
     parser.add_argument('--output_dir', type=str, default="output/generated", help='画像出力ディレクトリ')
     parser.add_argument('--prompt_only', '-p', action='store_true', help='画像生成を行わずプロンプトのみ出力')
     args = parser.parse_args()
+
+    # 実行時のオプション情報をログに出力
+    logger.info(f"実行オプション: {vars(args)}")
 
     # 設定ロード
     global_conf = load_yaml(args.global_config)['global']
