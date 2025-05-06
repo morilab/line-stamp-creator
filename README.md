@@ -206,7 +206,7 @@ python scripts/openai_image_gen.py --scenes input/scenes-006.yaml --model dall-e
 - 本番運用や高品質な画像生成には`gpt-image-1`などの最新モデルを推奨します。
 
 #### 【参考】DALLE3では意図通りの画像が出ない例
-![DALLE3失敗例](output/generated/image_3x3_DALLE3.png)
+![DALLE3失敗例](docs/images/image_3x3_DALLE3.png)
 
 ### 設定ファイルの役割
 - `input/global_config.yaml` : 全体の画風や共通条件
