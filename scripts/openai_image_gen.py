@@ -68,14 +68,15 @@ def build_prompt(global_conf, objects, scene_list):
     # グローバル条件を冒頭に列挙
     global_lines = [str(v) for v in global_conf.values()]
     prompt = "\n".join(global_lines)
-    prompt += "\n\nグリッドには以下を配置する。\n"
-    # オブジェクト名を詳細説明に置換し、番号付きで列挙
+    prompt += "\n\n"
+    # 各オブジェクトの特徴を明示的に列挙
+    for name, obj in objects.items():
+        desc = '、'.join(obj['description']) if isinstance(obj, dict) and 'description' in obj else '、'.join(obj)
+        prompt += f"「{name}」は以下の特徴を厳密に守ります。{desc}\n"
+    prompt += "\nグリッドには以下を配置する。\n"
+    # シーンはそのまま番号付きで列挙
     for idx, scene in enumerate(scene_list, 1):
-        replaced = scene
-        for name, obj in objects.items():
-            desc = '、'.join(obj['description']) if isinstance(obj, dict) and 'description' in obj else '、'.join(obj)
-            replaced = replaced.replace(name, desc)
-        prompt += f"{idx}. {replaced}\n"
+        prompt += f"{idx}. {scene}\n"
     prompt += "\n"
     return prompt
 

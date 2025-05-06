@@ -63,6 +63,23 @@ def flood_fill_background(arr: np.ndarray, bg_color: np.ndarray, alpha: Optional
                 continue
             queue.append((y, w-1))
         
+        # 外周ピクセルのRGB値のmin-maxを計算
+        border_pixels = []
+        for x in range(w):
+            if alpha is None or alpha[0, x] >= 128:
+                border_pixels.append(arr[0, x])
+            if alpha is None or alpha[h-1, x] >= 128:
+                border_pixels.append(arr[h-1, x])
+        for y in range(h):
+            if alpha is None or alpha[y, 0] >= 128:
+                border_pixels.append(arr[y, 0])
+            if alpha is None or alpha[y, w-1] >= 128:
+                border_pixels.append(arr[y, w-1])
+        
+        border_pixels = np.array(border_pixels)
+        min_rgb = np.min(border_pixels, axis=0)
+        max_rgb = np.max(border_pixels, axis=0)
+        
         # Flood Fill
         while queue:
             y, x = queue.popleft()
@@ -74,7 +91,7 @@ def flood_fill_background(arr: np.ndarray, bg_color: np.ndarray, alpha: Optional
                 mask[y, x] = 1
                 continue
             color = arr[y, x]
-            if np.linalg.norm(color - bg_color) <= threshold:
+            if np.all(min_rgb <= color) and np.all(color <= max_rgb):
                 mask[y, x] = 1
                 for dy, dx in [(-1,0),(1,0),(0,-1),(0,1)]:
                     ny, nx = y+dy, x+dx
