@@ -1,3 +1,8 @@
+# 仮想環境について
+# このスクリプトは、プロジェクトルートの.venv仮想環境で実行することを想定しています。
+# 必要なパッケージ: openai, python-dotenv, pyyaml
+# 実行方法: source .venv/bin/activate && python scripts/openai_image_gen.py
+
 import os
 import openai
 from dotenv import load_dotenv
@@ -72,8 +77,8 @@ def build_prompt(global_conf, objects, scene_list):
     # 各オブジェクトの特徴を明示的に列挙
     for name, obj in objects.items():
         desc = '、'.join(obj['description']) if isinstance(obj, dict) and 'description' in obj else '、'.join(obj)
-        prompt += f"「{name}」は以下の特徴を厳密に守ります。{desc}\n"
-    prompt += "\nグリッドには以下を配置する。\n"
+        prompt += f"「{name}」は次の特徴を厳密に守ります:{desc};\n"
+    prompt += "\nグリッドには以下を配置:\n"
     # シーンはそのまま番号付きで列挙
     for idx, scene in enumerate(scene_list, 1):
         prompt += f"{idx}. {scene}\n"
@@ -87,7 +92,7 @@ def generate_scenes_with_gpt(scene_prompts, num):
     for cond in scene_prompts:
         user_prompt += f"- {cond}\n"
     response = openai.chat.completions.create(
-        model="gpt-4",
+        model="gpt-4o",
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}

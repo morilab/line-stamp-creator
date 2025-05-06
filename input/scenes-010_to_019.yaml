@@ -1,0 +1,61 @@
+scenes:
+  image_3x3_010:
+    generate_mode: "gpt_generated"
+    num: 9
+    scene:
+      - "うしくんかぶたくんが登場します"
+      - "家族や身近な人に使える、日常のあいさつ（おはよう・おやすみ・いってきます・ただいま・おかえりなど）"
+  image_3x3_011:
+    generate_mode: "gpt_generated"
+    num: 9
+    scene:
+      - "うしくんかぶたくんが登場します"
+      - "家族や身近な人に『ありがとう』『助かったよ』など感謝や、OK・了解・承知など返事を伝えるシーン"
+  image_3x3_012:
+    generate_mode: "gpt_generated"
+    num: 9
+    scene:
+      - "うしくんかぶたくんが登場します"
+      - "やんわり断る、NO・NG・できない・ごめんね等のシーン"
+  image_3x3_013:
+    generate_mode: "gpt_generated"
+    num: 9
+    scene:
+      - "うしくんかぶたくんが登場します"
+      - "家族にちょっとしたお願いや頼みごとをするシーン"
+  image_3x3_014:
+    generate_mode: "gpt_generated"
+    num: 9
+    scene:
+      - "うしくんかぶたくんが登場します"
+      - "家族を応援したり、励ましたり、元気づけるシーン"
+  image_3x3_015:
+    generate_mode: "gpt_generated"
+    num: 9
+    scene:
+      - "うしくんかぶたくんが登場します"
+      - "体調を気遣う、無理しないで・お大事に・休んでね等のシーン"
+  image_3x3_016:
+    generate_mode: "gpt_generated"
+    num: 9
+    scene:
+      - "うしくんかぶたくんが登場します"
+      - "帰宅・外出・移動に関するシーン（今から帰る、出かける、待ってて等）"
+  image_3x3_017:
+    generate_mode: "gpt_generated"
+    num: 9
+    scene:
+      - "うしくんかぶたくんが登場します"
+      - "食事やお弁当、家族とのごはんに関するシーン"
+  image_3x3_018:
+    generate_mode: "gpt_generated"
+    num: 9
+    scene:
+      - "うしくんかぶたくんが登場します"
+      - "天気や季節のあいさつ（暑いね・寒いね・雨だね・春だね等）"
+  image_3x3_019:
+    generate_mode: "gpt_generated"
+    num: 9
+    scene:
+      - "うしくんかぶたくんが登場します"
+      - "家族のやりとりや日常のほっこりした一コマ"

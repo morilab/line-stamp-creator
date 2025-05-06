@@ -1,3 +1,8 @@
+# 仮想環境について
+# このスクリプトは、プロジェクトルートの.venv仮想環境で実行することを想定しています。
+# 必要なパッケージ: numpy, Pillow, scipy
+# 実行方法: source .venv/bin/activate && python scripts/mask_generator.py
+
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 from collections import deque
@@ -6,7 +11,11 @@ import math
 import os
 import logging
 import sys
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict, Set
+from scipy.spatial import ConvexHull
+from skimage.morphology import convex_hull_image
+from skimage.measure import find_contours
+from shapely.geometry import Polygon, Point
 
 # ロギングの設定
 logging.basicConfig(
@@ -30,7 +39,10 @@ def validate_image(image_path: str) -> bool:
             if img.format not in ['PNG', 'JPEG']:
                 logger.error(f"Unsupported image format: {img.format}")
                 return False
-            if img.mode not in ['RGB', 'RGBA']:
+            # RGBAの場合はRGBに変換
+            if img.mode == 'RGBA':
+                img = img.convert('RGB')
+            elif img.mode not in ['RGB']:
                 logger.error(f"Unsupported color mode: {img.mode}")
                 return False
     except Exception as e:
@@ -39,8 +51,8 @@ def validate_image(image_path: str) -> bool:
     
     return True
 
-def flood_fill_background(arr: np.ndarray, bg_color: np.ndarray, alpha: Optional[np.ndarray] = None, threshold: int = 30) -> np.ndarray:
-    """背景のFlood Fill処理（アルファ値が低い部分は常に背景とみなす）"""
+def flood_fill_background(arr: np.ndarray, bg_color: np.ndarray, threshold: int = 30) -> np.ndarray:
+    """背景のFlood Fill処理（HSV色空間を使用して背景色の範囲を決定）"""
     try:
         h, w, c = arr.shape
         mask = np.zeros((h, w), dtype=np.uint8)
@@ -49,36 +61,40 @@ def flood_fill_background(arr: np.ndarray, bg_color: np.ndarray, alpha: Optional
         
         # 外周ピクセルをキューに追加
         for x in range(w):
-            if alpha is not None and alpha[0, x] < 128:
-                continue
             queue.append((0, x))
-            if alpha is not None and alpha[h-1, x] < 128:
-                continue
             queue.append((h-1, x))
         for y in range(h):
-            if alpha is not None and alpha[y, 0] < 128:
-                continue
             queue.append((y, 0))
-            if alpha is not None and alpha[y, w-1] < 128:
-                continue
             queue.append((y, w-1))
         
-        # 外周ピクセルのRGB値のmin-maxを計算
+        # RGBからHSVに変換
+        img_rgb = Image.fromarray(arr)
+        img_hsv = img_rgb.convert('HSV')
+        arr_hsv = np.array(img_hsv)
+        
+        # 外周ピクセルのHSV値の統計を計算
         border_pixels = []
         for x in range(w):
-            if alpha is None or alpha[0, x] >= 128:
-                border_pixels.append(arr[0, x])
-            if alpha is None or alpha[h-1, x] >= 128:
-                border_pixels.append(arr[h-1, x])
+            border_pixels.append(arr_hsv[0, x])
+            border_pixels.append(arr_hsv[h-1, x])
         for y in range(h):
-            if alpha is None or alpha[y, 0] >= 128:
-                border_pixels.append(arr[y, 0])
-            if alpha is None or alpha[y, w-1] >= 128:
-                border_pixels.append(arr[y, w-1])
+            border_pixels.append(arr_hsv[y, 0])
+            border_pixels.append(arr_hsv[y, w-1])
         
         border_pixels = np.array(border_pixels)
-        min_rgb = np.min(border_pixels, axis=0)
-        max_rgb = np.max(border_pixels, axis=0)
+        mean_hsv = np.mean(border_pixels, axis=0)
+        std_hsv = np.std(border_pixels, axis=0)
+        
+        # HSVの各成分の閾値を設定
+        # H（色相）は無視、S（彩度）とV（明度）のみで判定
+        s_threshold = 30  # 彩度の閾値（低いほど背景と判定）
+        v_threshold = 200  # 明度の閾値（高いほど背景と判定）
+        
+        logger.info(f"Background color statistics (HSV):")
+        logger.info(f"Mean HSV: {mean_hsv}")
+        logger.info(f"Std HSV: {std_hsv}")
+        logger.info(f"Saturation threshold: {s_threshold}")
+        logger.info(f"Value threshold: {v_threshold}")
         
         # Flood Fill
         while queue:
@@ -86,19 +102,13 @@ def flood_fill_background(arr: np.ndarray, bg_color: np.ndarray, alpha: Optional
             if visited[y, x]:
                 continue
             visited[y, x] = True
-            # アルファ値が低い場合は常に背景
-            if alpha is not None and alpha[y, x] < 128:
-                mask[y, x] = 1
-                continue
-            color = arr[y, x]
-            if np.all(min_rgb <= color) and np.all(color <= max_rgb):
+            hsv = arr_hsv[y, x]
+            # 彩度が低く、明度が高い場合を背景と判定
+            if hsv[1] <= s_threshold and hsv[2] >= v_threshold:
                 mask[y, x] = 1
                 for dy, dx in [(-1,0),(1,0),(0,-1),(0,1)]:
                     ny, nx = y+dy, x+dx
                     if 0<=ny<h and 0<=nx<w and not visited[ny, nx]:
-                        # 進行先もアルファ値128以上のみ
-                        if alpha is not None and alpha[ny, nx] < 128:
-                            continue
                         queue.append((ny, nx))
         return mask
     except Exception as e:
@@ -106,20 +116,20 @@ def flood_fill_background(arr: np.ndarray, bg_color: np.ndarray, alpha: Optional
         raise
 
 def create_mask(image_path: str, mask_path: str, threshold: int = 30) -> None:
-    """マスク画像の生成（RGBA画像の透明部分は白で埋めてから処理）"""
+    """マスク画像の生成"""
     try:
         if not validate_image(image_path):
             return
 
         img = Image.open(image_path)
-        if img.mode == 'RGBA':
-            arr = np.array(img)
-            alpha = arr[..., 3]
-            arr_rgb = arr[..., :3].copy()
-            # 透明部分（アルファ値128未満）を白で埋める
-            arr_rgb[alpha < 128] = [255, 255, 255]
-        else:
-            arr_rgb = np.array(img.convert('RGB'))
+        # デバッグ用にRGB変換後の画像を保存（RGBAでもRGBでも保存）
+        rgb_img = img.convert('RGB')
+        # debug_rgb_path = os.path.splitext(mask_path)[0] + '_rgb.png'
+        # rgb_img.save(debug_rgb_path)
+        # logger.info(f"Saved debug RGB image: {debug_rgb_path}")
+        
+        # 以降の処理はRGB画像を使用
+        arr_rgb = np.array(rgb_img)
 
         # 外周ピクセルの平均色を背景色とする
         border = 1
@@ -131,7 +141,7 @@ def create_mask(image_path: str, mask_path: str, threshold: int = 30) -> None:
         bg_color = np.mean(outer_pixels, axis=0)
 
         # Flood Fillで背景領域を特定
-        bg_mask = flood_fill_background(arr_rgb, bg_color, alpha=None, threshold=threshold)
+        bg_mask = flood_fill_background(arr_rgb, bg_color, threshold=threshold)
 
         # 背景以外を白（255）、背景を黒（0）
         mask = np.where(bg_mask == 0, 255, 0).astype(np.uint8)
@@ -190,23 +200,45 @@ def draw_line(arr_draw, start_y, start_x, end_y, end_x, color, width=2):
                 if 0 <= ny < arr_draw.shape[0] and 0 <= nx < arr_draw.shape[1]:
                     arr_draw[ny, nx] = color
 
-def mark_centers_on_mask(mask_path, output_path):
+def mark_centers_on_mask(mask_path, output_path, area_threshold=30):
     try:
         print(f"Loading mask: {mask_path}")
         mask_img = Image.open(mask_path).convert('L')
         arr = np.array(mask_img)
         print(f"Mask shape: {arr.shape}, dtype: {arr.dtype}")
+        
         # 白いエリア（255）のラベリング
         structure = np.ones((3,3), dtype=int)
         labeled, num_features = label(arr == 255, structure=structure)
         print(f"Number of features: {num_features}")
         
+        # 面積フィルタリングのカウンター
+        filtered_objects = 0
+        
+        # バウンディングボックス情報を保存するリスト
+        bounding_box_list = []
+        valid_box_flags = []
+        
         # 各オブジェクトの面積を計算
         areas = []
+        chull_dict = {}
         for i in range(1, num_features + 1):
-            area = np.sum(labeled == i)
-            areas.append((i, area))  # (オブジェクトID, 面積)のタプルを保存
-            print(f"Object {i}: area = {area}")
+            obj_mask = (labeled == i)
+            if np.sum(obj_mask) > 0:
+                chull = convex_hull_image(obj_mask)
+                area = np.sum(chull)
+                chull_dict[i] = chull
+                if area > area_threshold:
+                    areas.append((i, area))
+                    # バウンディングボックスを計算
+                    y_coords, x_coords = np.where(obj_mask)
+                    min_y, max_y = np.min(y_coords), np.max(y_coords)
+                    min_x, max_x = np.min(x_coords), np.max(x_coords)
+                    bounding_box_list.append((min_x, min_y, max_x, max_y))
+                    valid_box_flags.append(True)
+            else:
+                filtered_objects += 1
+        print(f"\nFiltered out {filtered_objects} small objects (area <= {area_threshold})")
         
         # 面積でソート
         areas.sort(key=lambda x: x[1], reverse=True)
@@ -214,191 +246,121 @@ def mark_centers_on_mask(mask_path, output_path):
         for obj_id, area in areas:
             print(f"Object {obj_id}: area = {area}")
         
-        # メインオブジェクトのIDを保存
-        main_object_ids = set(obj_id for obj_id, _ in areas[:9])
-        print(f"\nMain object IDs: {main_object_ids}")
+        # 面積が10000以上のオブジェクトIDを主オブジェクトとする
+        main_object_ids = set(obj_id for obj_id, area in areas if area >= 10000)
+        print(f"\nMain object IDs (area >= 10000): {main_object_ids}")
         
-        centers = center_of_mass(arr == 255, labeled, range(1, num_features+1))
-        print("\nCenters:")
-        for i, (cy, cx) in enumerate(centers, 1):
-            print(f"Object {i}: center = ({cy}, {cx})")
+        # 結果を描画するための配列
+        arr_draw = arr.copy()
+        bounding_img = Image.fromarray(arr_draw).convert('RGBA')  # RGBAに変更
+        draw = ImageDraw.Draw(bounding_img)
         
-        # RGB画像に変換
-        out_img = mask_img.convert('RGB')
-        arr_draw = np.array(out_img)
-        
-        # 主オブジェクトの中心座標を保存
-        main_centers = []
-        for i, (cy, cx) in enumerate(centers):
-            obj_id = i + 1
-            if obj_id in main_object_ids:
-                main_centers.append((obj_id, cy, cx))
-        
-        # 統合されたオブジェクトのマスクを作成
-        combined_mask = np.zeros_like(arr)
-        
-        # 重心を描画
-        for i, (cy, cx) in enumerate(centers):
-            obj_id = i + 1  # オブジェクトIDは1から始まる
-            cy, cx = int(round(cy)), int(round(cx))
-            
-            # 対応する面積を探す
-            area = next(area for obj_id2, area in areas if obj_id2 == obj_id)
-            print(f"\nDrawing circle for Object {obj_id}:")
-            print(f"  Center: ({cy}, {cx})")
-            print(f"  Area: {area}")
-            
-            # 円の半径を計算（面積が等しくなるように）
-            radius = int(math.sqrt(area / math.pi))
-            print(f"  Radius: {radius}")
-            
-            # オブジェクトがメインかどうかで色と線の太さを決定
+        # 主・副オブジェクトの重心・半径リストを作成
+        object_info = []  # (obj_id, cy, cx, radius, is_main, area)
+        for obj_id, area in areas:
+            y_coords, x_coords = np.where(labeled == obj_id)
+            cy, cx = center_of_mass(labeled == obj_id)
+            cy, cx = int(cy), int(cx)
+            # 凸包の外接円半径（近似）
+            if len(x_coords) >= 3:
+                points = np.stack([x_coords, y_coords], axis=1)
+                hull = ConvexHull(points)
+                hull_points = points[hull.vertices]
+                if len(hull_points) >= 2:
+                    dists = np.sqrt(np.sum((hull_points[None,:,:] - hull_points[:,None,:])**2, axis=2))
+                    max_dist = np.max(dists)
+                    radius = int(max_dist/2)
+                else:
+                    radius = 1
+            elif len(x_coords) == 2:
+                radius = int(np.linalg.norm([x_coords[0]-x_coords[1], y_coords[0]-y_coords[1]]) / 2)
+            else:
+                radius = 1
             is_main = obj_id in main_object_ids
-            color = [255, 0, 0]  # 両方とも明るい赤
-            line_width = 10 if is_main else 2  # 主は10ピクセル、副は2ピクセル
-            
-            # 円の輪郭を描画（より細かい間隔で）
-            for angle in range(0, 360, 1):  # 1度ずつ描画
-                rad = math.radians(angle)
-                x = int(cx + radius * math.cos(rad))
-                y = int(cy + radius * math.sin(rad))
-                if 0 <= y < arr_draw.shape[0] and 0 <= x < arr_draw.shape[1]:
-                    # 線の太さを調整
-                    for dy in range(-line_width//2, line_width//2 + 1):
-                        for dx in range(-line_width//2, line_width//2 + 1):
-                            ny, nx = y + dy, x + dx
-                            if 0 <= ny < arr_draw.shape[0] and 0 <= nx < arr_draw.shape[1]:
-                                arr_draw[ny, nx] = color
-                                combined_mask[ny, nx] = 255  # 赤い円をマスクに追加
-            
-            # 白いオブジェクトをマスクに追加
-            combined_mask[labeled == obj_id] = 255
-            
-            # 副オブジェクトの場合、最も近い主オブジェクトまでの線を描画
-            if not is_main:
-                min_dist = float('inf')
-                closest_main = None
-                
-                # 最も近い主オブジェクトを探す
-                for main_id, main_cy, main_cx in main_centers:
-                    # 主オブジェクトの円周上の最も近い点を計算
-                    dx = cx - main_cx
-                    dy = cy - main_cy
-                    dist = math.sqrt(dx*dx + dy*dy)
-                    if dist < min_dist:
-                        min_dist = dist
-                        closest_main = (main_id, main_cy, main_cx)
-                
-                if closest_main:
-                    main_id, main_cy, main_cx = closest_main
-                    # 主オブジェクトの円周上の点を計算
-                    dx = cx - main_cx
-                    dy = cy - main_cy
-                    angle = math.atan2(dy, dx)
-                    main_radius = int(math.sqrt(next(area for obj_id2, area in areas if obj_id2 == main_id) / math.pi))
-                    end_x = int(main_cx + main_radius * math.cos(angle))
-                    end_y = int(main_cy + main_radius * math.sin(angle))
-                    
-                    # 線を描画
-                    draw_line(arr_draw, cy, cx, end_y, end_x, [255, 0, 0], width=2)
-                    # 線をマスクに追加
-                    draw_line(combined_mask, cy, cx, end_y, end_x, 255, width=2)
+            object_info.append((obj_id, cy, cx, radius, is_main, area))
+
+        # 衝突検出（マージ対象IDセットを作成）
+        collisions = detect_convex_hull_collisions(labeled, object_info)
+        merge_target_ids = set()
+        for ids in collisions.values():
+            merge_target_ids.update(ids)
+        merge_target_ids.update([k for k, v in collisions.items() if v])
+
+        # 半透明青バウンディングボックス用のオーバーレイを作成
+        overlay = Image.new('RGBA', bounding_img.size, (0,0,0,0))
+        draw_overlay = ImageDraw.Draw(overlay)
+
+        # 各オブジェクトの凸包を描画（マージ対象は黄色、それ以外は赤）
+        for obj_id, cy, cx, radius, is_main, area in object_info:
+            y_coords, x_coords = np.where(labeled == obj_id)
+            points = np.stack([x_coords, y_coords], axis=1)  # (x, y)順
+            ellipse_width = 10 if is_main else 5
+            if len(points) >= 3:
+                hull = ConvexHull(points)
+                hull_points = points[hull.vertices]
+                polygon = [tuple(map(int, p)) for p in hull_points]
+                polygon.append(polygon[0])
+                if obj_id in merge_target_ids:
+                    draw.line(polygon, fill=(255,255,0,255), width=ellipse_width)  # 黄色
+                else:
+                    draw.line(polygon, fill=(255,0,0,255), width=ellipse_width)  # 赤
+            elif len(points) == 2:
+                p0 = tuple(map(int, points[0]))
+                p1 = tuple(map(int, points[1]))
+                if obj_id in merge_target_ids:
+                    draw.line([p0, p1], fill=(255,255,0,255), width=ellipse_width)
+                else:
+                    draw.line([p0, p1], fill=(255,0,0,255), width=ellipse_width)
+            elif len(points) == 1:
+                x, y = map(int, points[0])
+                if obj_id in merge_target_ids:
+                    draw.ellipse([x-2, y-2, x+2, y+2], outline=(255,255,0,255), width=2)
+                else:
+                    draw.ellipse([x-2, y-2, x+2, y+2], outline=(255,0,0,255), width=2)
+
+        # overlayのアルファ値を50%にして合成
+        alpha = 128
+        overlay_alpha = overlay.split()[3].point(lambda p: alpha if p > 0 else 0)
+        overlay.putalpha(overlay_alpha)
+        bounding_img = Image.alpha_composite(bounding_img, overlay)
+
+        # マージ後の凸包を緑色で描画
+        if len(object_info) > 0:
+            collisions = detect_convex_hull_collisions(labeled, object_info)
+            if any(collisions.values()):
+                labeled, object_info = merge_colliding_objects(labeled, object_info, collisions)
+                for obj_id, cy, cx, radius, is_main, area in object_info:
+                    y_coords, x_coords = np.where(labeled == obj_id)
+                    points = np.stack([x_coords, y_coords], axis=1)
+                    ellipse_width = 10 if is_main else 5
+                    if len(points) >= 3:
+                        hull = ConvexHull(points)
+                        hull_points = points[hull.vertices]
+                        polygon = [tuple(map(int, p)) for p in hull_points]
+                        polygon.append(polygon[0])
+                        logger.info(f"[MERGED CONVEX HULL] obj_id={obj_id}, vertices={polygon}")
+                        draw.line(polygon, fill=(0,255,0,255), width=ellipse_width)  # 緑色
+                    elif len(points) == 2:
+                        p0 = tuple(map(int, points[0]))
+                        p1 = tuple(map(int, points[1]))
+                        logger.info(f"[MERGED CONVEX HULL] obj_id={obj_id}, vertices={[p0, p1]}")
+                        draw.line([p0, p1], fill=(0,255,0,255), width=ellipse_width)
+                    elif len(points) == 1:
+                        x, y = map(int, points[0])
+                        logger.info(f"[MERGED CONVEX HULL] obj_id={obj_id}, vertices={[(x, y)]}")
+                        draw.ellipse([x-2, y-2, x+2, y+2], outline=(0,255,0,255), width=2)
+
+        logger.info(f"Found {len(bounding_box_list)} valid objects")
         
-        # 統合されたオブジェクトをラベリング
-        combined_labeled, combined_num = label(combined_mask == 255, structure=structure)
+        # 結果を保存
+        bounding_img.save(output_path)
+        logger.info(f"Saved marked centers image: {output_path}")
         
-        # 枠線描画後にImage.fromarrayで画像を生成し、テキストのみImageDrawで描画
-        out_img = Image.fromarray(arr_draw)
-        draw = ImageDraw.Draw(out_img)
-        
-        # フォントサイズを設定（より大きく）
-        font_size = 32
-        try:
-            # フォントサイズを大きく設定
-            font = ImageFont.truetype("arial.ttf", size=font_size)
-        except:
-            # デフォルトフォントの場合は、サイズを大きくするためにスケーリング
-            font = ImageFont.load_default()
-            font = font.font_variant(size=font_size)
-        
-        # 青い枠を描画（統合されたオブジェクトに対して）
-        bounding_box_list = []
-        valid_box_flags = []
-        # まず全てのバウンディングボックスをリストアップし、valid判定も行う
-        for i in range(1, combined_num + 1):
-            y_coords, x_coords = np.where(combined_labeled == i)
-            if len(y_coords) == 0:
-                continue
-            min_y, max_y = np.min(y_coords), np.max(y_coords)
-            min_x, max_x = np.min(x_coords), np.max(x_coords)
-            line_width = 4
-            padding = 4
-            box = (min_x - padding, min_y - padding, max_x + padding, max_y + padding)
-            bounding_box_list.append(box)
-            xw = box[2] - box[0]
-            yw = box[3] - box[1]
-            ratio = xw / yw if yw != 0 else 0
-            valid = 0.7 <= ratio <= 1.3 and xw <= 500 and yw <= 500
-            valid_box_flags.append(valid)
-        # 青枠を全て描画
-        for box in bounding_box_list:
-            min_x, min_y, max_x, max_y = box
-            line_width = 4
-            # 青枠
-            for w in range(line_width):
-                for x in range(min_x - w, max_x + w + 1):
-                    if 0 <= min_y - w < arr_draw.shape[0] and 0 <= x < arr_draw.shape[1]:
-                        arr_draw[min_y - w, x] = [0, 0, 255]
-                    if 0 <= max_y + w < arr_draw.shape[0] and 0 <= x < arr_draw.shape[1]:
-                        arr_draw[max_y + w, x] = [0, 0, 255]
-                for y in range(min_y - w, max_y + w + 1):
-                    if 0 <= y < arr_draw.shape[0] and 0 <= min_x - w < arr_draw.shape[1]:
-                        arr_draw[y, min_x - w] = [0, 0, 255]
-                    if 0 <= y < arr_draw.shape[0] and 0 <= max_x + w < arr_draw.shape[1]:
-                        arr_draw[y, max_x + w] = [0, 0, 255]
-        # validなものだけ水色枠を重ねて描画
-        for box, valid in zip(bounding_box_list, valid_box_flags):
-            if valid:
-                min_x, min_y, max_x, max_y = box
-                for x in range(min_x, max_x+1):
-                    if 0 <= min_y < arr_draw.shape[0] and 0 <= x < arr_draw.shape[1]:
-                        arr_draw[min_y, x] = [255, 255, 0]  # 黄色
-                    if 0 <= max_y < arr_draw.shape[0] and 0 <= x < arr_draw.shape[1]:
-                        arr_draw[max_y, x] = [255, 255, 0]  # 黄色
-                for y in range(min_y, max_y+1):
-                    if 0 <= y < arr_draw.shape[0] and 0 <= min_x < arr_draw.shape[1]:
-                        arr_draw[y, min_x] = [255, 255, 0]  # 黄色
-                    if 0 <= y < arr_draw.shape[0] and 0 <= max_x < arr_draw.shape[1]:
-                        arr_draw[y, max_x] = [255, 255, 0]  # 黄色
-        # 枠線描画後にImage.fromarrayで画像を生成し、テキストのみImageDrawで描画
-        out_img = Image.fromarray(arr_draw)
-        draw = ImageDraw.Draw(out_img)
-        # テキスト描画（青枠の中心にサイズ表示）
-        font_size = 32
-        try:
-            font = ImageFont.truetype("arial.ttf", size=font_size)
-        except:
-            font = ImageFont.load_default()
-            font = font.font_variant(size=font_size)
-        for box in bounding_box_list:
-            min_x, min_y, max_x, max_y = box
-            width = max_x - min_x
-            height = max_y - min_y
-            center_x = (min_x + max_x) // 2
-            center_y = (min_y + max_y) // 2
-            text = f"({width},{height})"
-            text_bbox = draw.textbbox((0, 0), text, font=font)
-            text_width = text_bbox[2] - text_bbox[0]
-            text_height = text_bbox[3] - text_bbox[1]
-            text_x = center_x - text_width // 2
-            text_y = center_y - text_height // 2
-            draw.text((text_x, text_y), text, fill=(0, 0, 255), font=font)
-        
-        out_img.save(output_path)
-        print(f'\nSaved: {output_path}')
         return bounding_box_list, valid_box_flags
+        
     except Exception as e:
-        print(f"Error in mark_centers_on_mask: {e}")
+        logger.error(f"Error in mark_centers_on_mask: {str(e)}")
+        raise
 
 def extract_bounding_box_segments(
     image_path: str,
@@ -474,6 +436,265 @@ def extract_bounding_box_segments(
         logger.error(f"Error in extract_bounding_box_segments: {str(e)}")
         raise
 
+def detect_convex_hull_collisions(labeled: np.ndarray, object_info: List[Tuple]) -> Dict[int, List[int]]:
+    """
+    凸包同士の衝突を検出する
+    
+    Args:
+        labeled: ラベル付き画像配列
+        object_info: オブジェクト情報のリスト (obj_id, cy, cx, radius, is_main, area)
+    
+    Returns:
+        Dict[int, List[int]]: 衝突しているオブジェクトIDのマッピング
+    """
+    collisions = {}
+    
+    # 各オブジェクトの凸包を計算
+    hulls = {}
+    for obj_id, _, _, _, _, _ in object_info:
+        y_coords, x_coords = np.where(labeled == obj_id)
+        points = np.stack([x_coords, y_coords], axis=1)
+        if len(points) >= 3:
+            hull = ConvexHull(points)
+            hull_points = points[hull.vertices]
+            polygon = Polygon(hull_points)
+            hulls[obj_id] = polygon
+    
+    # 衝突検出
+    for obj_id1, hull1 in hulls.items():
+        collisions[obj_id1] = []
+        for obj_id2, hull2 in hulls.items():
+            if obj_id1 != obj_id2 and hull1.intersects(hull2):
+                collisions[obj_id1].append(obj_id2)
+    
+    return collisions
+
+def merge_colliding_objects(labeled: np.ndarray, object_info: List[Tuple], collisions: Dict[int, List[int]]) -> Tuple[np.ndarray, List[Tuple]]:
+    """
+    衝突しているオブジェクトをマージする
+    
+    Args:
+        labeled: ラベル付き画像配列
+        object_info: オブジェクト情報のリスト
+        collisions: 衝突情報の辞書
+    
+    Returns:
+        Tuple[np.ndarray, List[Tuple]]: マージ後のラベル付き画像とオブジェクト情報
+    """
+    # マージするオブジェクトのグループを特定
+    merge_groups: List[Set[int]] = []
+    processed = set()
+    
+    for obj_id, colliding in collisions.items():
+        if obj_id in processed:
+            continue
+            
+        if not colliding:
+            processed.add(obj_id)
+            continue
+            
+        # 新しいマージグループを作成
+        group = {obj_id}
+        group.update(colliding)
+        
+        # 既存のグループとマージ
+        merged = False
+        for existing_group in merge_groups:
+            if group & existing_group:
+                existing_group.update(group)
+                merged = True
+                break
+        
+        if not merged:
+            merge_groups.append(group)
+        
+        processed.update(group)
+    
+    # マージグループの情報をログ出力
+    if merge_groups:
+        logger.info("Merging groups:")
+        for i, group in enumerate(merge_groups, 1):
+            logger.info(f"Group {i}: {sorted(group)}")
+    
+    # マージグループごとに処理
+    new_labeled = labeled.copy()
+    new_object_info = []
+    next_label = 1
+    
+    # マージしないオブジェクトを処理
+    for obj_id, cy, cx, radius, is_main, area in object_info:
+        if not any(obj_id in group for group in merge_groups):
+            new_labeled[new_labeled == obj_id] = next_label
+            new_object_info.append((next_label, cy, cx, radius, is_main, area))
+            logger.info(f"Kept object {obj_id} as new object {next_label}")
+            next_label += 1
+    
+    # マージグループを処理
+    for group in merge_groups:
+        # グループ内のオブジェクトをマージ
+        merged_mask = np.zeros_like(labeled, dtype=bool)
+        for obj_id in group:
+            merged_mask |= (labeled == obj_id)
+        
+        # 新しいラベルを割り当て
+        new_labeled[merged_mask] = next_label
+        
+        # マージ後のオブジェクト情報を計算
+        y_coords, x_coords = np.where(merged_mask)
+        cy, cx = center_of_mass(merged_mask)
+        cy, cx = int(cy), int(cx)
+        
+        # 凸包の計算
+        if len(x_coords) >= 3:
+            points = np.stack([x_coords, y_coords], axis=1)
+            hull = ConvexHull(points)
+            hull_points = points[hull.vertices]
+            area = Polygon(hull_points).area
+            if len(hull_points) >= 2:
+                dists = np.sqrt(np.sum((hull_points[None,:,:] - hull_points[:,None,:])**2, axis=2))
+                max_dist = np.max(dists)
+                radius = int(max_dist/2)
+            else:
+                radius = 1
+        elif len(x_coords) == 2:
+            area = 2
+            radius = int(np.linalg.norm([x_coords[0]-x_coords[1], y_coords[0]-y_coords[1]]) / 2)
+        else:
+            area = 1
+            radius = 1
+        
+        # 主オブジェクトかどうかの判定（面積で判断）
+        is_main = area >= 10000
+        
+        new_object_info.append((next_label, cy, cx, radius, is_main, area))
+        logger.info(f"Merged objects {sorted(group)} into new object {next_label} (area: {area:.1f}, {'main' if is_main else 'sub'})")
+        next_label += 1
+    
+    return new_labeled, new_object_info
+
+def analyze_object_hierarchy(mask_path, area_main_threshold=10000):
+    """
+    マスク画像からオブジェクトの主従関係を整理し、重心座標・主従情報・可視化画像を返す
+    入力: mask_path（マスク画像ファイルパス）
+    出力: centers（{obj_id: (cy, cx)}）、hierarchy（{obj_id: {'is_main': bool, 'parent': main_id or None}}）、bounding_img（Pillow画像）
+    """
+    import numpy as np
+    from PIL import Image, ImageDraw
+    from scipy.ndimage import label, center_of_mass
+    import math
+
+    mask_img = Image.open(mask_path).convert('L')
+    arr = np.array(mask_img)
+    structure = np.ones((3,3), dtype=int)
+    labeled, num_features = label(arr == 255, structure=structure)
+    logger.info(f"Number of features detected: {num_features}")
+
+    # 面積・重心・半径・主従情報を集計（面積は凸包で計算）
+    areas = []
+    chull_dict = {}
+    filtered_objects = 0
+    for i in range(1, num_features + 1):
+        obj_mask = (labeled == i)
+        if np.sum(obj_mask) > 0:
+            chull = convex_hull_image(obj_mask)
+            area = np.sum(chull)
+            chull_dict[i] = chull
+            logger.info(f"Object {i}: raw area = {np.sum(obj_mask)}, convex hull area = {area}")
+            if area > 30:
+                areas.append((i, area))
+                logger.info(f"Object {i} passed area filter")
+            else:
+                logger.info(f"Object {i} filtered out (area <= 30)")
+        else:
+            filtered_objects += 1
+            logger.info(f"Object {i} has no pixels")
+    areas.sort(key=lambda x: x[1], reverse=True)
+    logger.info(f"Total objects after area filtering: {len(areas)}")
+
+    # 主オブジェクトID（凸包面積で判定）
+    main_object_ids = set(obj_id for obj_id, area in areas if area >= area_main_threshold)
+    # オブジェクト情報リスト
+    object_info = []  # (obj_id, cy, cx, radius, is_main, area)
+    centers = {}
+    for obj_id, area in areas:
+        y_coords, x_coords = np.where(labeled == obj_id)
+        cy, cx = center_of_mass(labeled == obj_id)
+        cy, cx = int(cy), int(cx)
+        # 凸包の外接円半径（近似）
+        if len(x_coords) >= 3:
+            points = np.stack([x_coords, y_coords], axis=1)
+            hull = ConvexHull(points)
+            hull_points = points[hull.vertices]
+            if len(hull_points) >= 2:
+                dists = np.sqrt(np.sum((hull_points[None,:,:] - hull_points[:,None,:])**2, axis=2))
+                max_dist = np.max(dists)
+                radius = int(max_dist/2)
+            else:
+                radius = 1
+        elif len(x_coords) == 2:
+            radius = int(np.linalg.norm([x_coords[0]-x_coords[1], y_coords[0]-y_coords[1]]) / 2)
+        else:
+            radius = 1
+        is_main = obj_id in main_object_ids
+        object_info.append((obj_id, cy, cx, radius, is_main, area))
+        centers[obj_id] = (cy, cx)
+
+    # 衝突がなくなるまでマージを繰り返す
+    max_iterations = 10  # 無限ループ防止
+    for iteration in range(max_iterations):
+        # 凸包の衝突を検出
+        collisions = detect_convex_hull_collisions(labeled, object_info)
+        
+        # 衝突がない場合は終了
+        if not any(collisions.values()):
+            logger.info(f"No more collisions after {iteration} iterations")
+            break
+            
+        # 衝突情報をログに出力
+        logger.info(f"Iteration {iteration + 1}:")
+        for obj_id, colliding_objects in collisions.items():
+            if colliding_objects:
+                logger.info(f"Object {obj_id} collides with objects: {colliding_objects}")
+        
+        # オブジェクトをマージ
+        labeled, object_info = merge_colliding_objects(labeled, object_info, collisions)
+        
+        # 新しいオブジェクト情報からcentersを更新
+        centers = {obj_id: (cy, cx) for obj_id, cy, cx, _, _, _ in object_info}
+    
+    # 主従認識情報
+    hierarchy = {}
+    for obj_id, cy, cx, radius, is_main, area in object_info:
+        hierarchy[obj_id] = {'is_main': is_main, 'parent': None}
+
+    # 結果を描画するための配列
+    arr_draw = arr.copy()
+    bounding_img = Image.fromarray(arr_draw).convert('RGB')
+    draw = ImageDraw.Draw(bounding_img)
+
+    # 各オブジェクトの凸包を赤枠で描画
+    for obj_id, cy, cx, radius, is_main, area in object_info:
+        # オブジェクトの画素座標を取得
+        y_coords, x_coords = np.where(labeled == obj_id)
+        points = np.stack([x_coords, y_coords], axis=1)  # (x, y)順
+        ellipse_width = 10 if is_main else 5
+        if len(points) >= 3:
+            hull = ConvexHull(points)
+            hull_points = points[hull.vertices]
+            polygon = [tuple(map(int, p)) for p in hull_points]
+            # 閉じる
+            polygon.append(polygon[0])
+            draw.line(polygon, fill=(255, 0, 0), width=ellipse_width)
+        elif len(points) == 2:
+            p0 = tuple(map(int, points[0]))
+            p1 = tuple(map(int, points[1]))
+            draw.line([p0, p1], fill=(255, 0, 0), width=ellipse_width)
+        elif len(points) == 1:
+            x, y = map(int, points[0])
+            draw.ellipse([x-2, y-2, x+2, y+2], outline=(255, 0, 0), width=2)
+
+    return centers, hierarchy, bounding_img
+
 if __name__ == '__main__':
     try:
         # ディレクトリ構造の設定
@@ -494,6 +715,7 @@ if __name__ == '__main__':
 
         # output/generatedフォルダ内のすべてのPNGファイルを処理
         png_files = [f for f in os.listdir(input_dir) if f.lower().endswith('.png')]
+        png_files.sort()  # ファイル名でソート
         if not png_files:
             logger.warning(f"No PNG files found in {input_dir}")
             sys.exit(0)

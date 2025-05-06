@@ -7,8 +7,11 @@
 __pycache__/
 .venv/
 
-# ログファイルその他
+# ログファイル,テンポラリ,その他
+_*_/
 *.log
+*.swp
+*.bak
 
 #outputフォルダ内のpngファイルを無視
 output/*.png
