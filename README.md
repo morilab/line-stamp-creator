@@ -73,7 +73,7 @@ python scripts/mask_generator.py
 - 背景以外の領域を白（255）、背景を黒（0）としたマスク画像を生成します。
 
 例：  
-![マスク画像の例](images/image_3x3_001_mask.png)
+![マスク画像の例](docs/images/image_3x3_001_mask.png)
 
 ### バウンディングボックスの決め方
 - マスク画像上で白領域（255）を連結成分ラベリング（8近傍）で抽出します。
@@ -82,7 +82,7 @@ python scripts/mask_generator.py
 - バウンディングボックスの幅または高さが500pxを超える場合は出力対象外となります。
 
 例：  
-![バウンディングボックス画像の例](images/image_3x3_001_bounding.png)
+![バウンディングボックス画像の例](docs/images/image_3x3_001_bounding.png)
 
 ### 制約・注意点
 - 本ツールは「3x3グリッド（最大9個）」のLINEスタンプ画像を想定しています。
@@ -99,7 +99,7 @@ python scripts/mask_generator.py
 4. アクセス範囲（例：All repositories）や権限（例：Contents: Read and write）を設定。
 5. 「Generate token」をクリックし、表示されたトークンを必ずコピーして安全な場所に保存。
 
-![PAT発行画面の例](images/pat_generate_example.png)
+![PAT発行画面の例](docs/images/pat_generate_example.png)
 
 ### 2. PATの利用方法
 - git push/pullなどの操作時、パスワード入力欄にPATを貼り付ける。
@@ -110,5 +110,25 @@ python scripts/mask_generator.py
 - 万が一漏洩した場合や不要になった場合は、GitHubの「Personal access tokens」画面から削除（Revoke/Delete）する。
 - 必要に応じていつでも新しいPATを発行できる。
 - cursorはWSL側のgitではなくPowerShell側のgitから操作しているので注意。
+
+## OpenAI画像生成APIのモデルについて
+
+- 2025年5月時点で、OpenAIの画像生成APIで利用できる主なモデルは以下の通りです。
+    - **gpt-image-1** : 最新の高精度画像生成モデル。
+    - **dall-e-3** : 高精度・高画質な画像生成モデル。
+    - **dall-e-2** : 従来の画像生成モデル。
+- 画像生成APIを利用する際は、`model="gpt-image-1"` や `model="dall-e-3"` などと指定してください。
+- 最新のモデル情報はOpenAI公式ドキュメント（https://platform.openai.com/docs/models など）でご確認ください。
+
+### サンプル（Python）
+```python
+response = openai.images.generate(
+    model="gpt-image-1",  # または "dall-e-3"
+    prompt="A cute cat in a suit",
+    n=1,
+    size="1024x1024",
+    response_format="url"
+)
+```
 
 --- 
