@@ -12,7 +12,12 @@ __pycache__/
 
 #outputフォルダ内のpngファイルを無視
 output/*.png
+output/*-scene.yaml
+output/*.txt
 output/bounding/*.png
 output/masks/*.png
+output/generated/*.png
+output/generated/*-scene.yaml
+output/generated/*.txt
 
 

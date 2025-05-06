@@ -171,4 +171,42 @@ response = openai.images.generate(
 )
 ```
 
+## 画像生成スクリプト（openai_image_gen.py）の使い方
+
+### 基本的な使い方
+
+```bash
+python scripts/openai_image_gen.py --scenes <シーン設定YAML> [--model <モデル名>] [--global <グローバル設定YAML>] [--objects <オブジェクト設定YAML>] [--output_dir <出力ディレクトリ>] [--prompt_only]
+```
+
+#### 主なコマンドライン引数
+- `--scenes` または `-s` : シーン設定YAMLファイル（必須）
+- `--model` : 画像生成モデル（省略時はgpt-image-1、動作確認用にはdall-e-3も指定可能）
+- `--global` : グローバル設定YAMLファイル（省略時はinput/global_config.yaml）
+- `--objects` : オブジェクト設定YAMLファイル（省略時はinput/objects_config.yaml）
+- `--output_dir` : 画像出力ディレクトリ（省略時はoutput/generated）
+- `--prompt_only` : 画像生成を行わずプロンプトのみ出力
+
+#### 具体例
+
+1. 標準的な画像生成（gpt-image-1モデル）
+```bash
+python scripts/openai_image_gen.py --scenes input/scenes-006.yaml
+```
+
+2. 動作確認・テスト用画像生成（dall-e-3モデル）
+```bash
+python scripts/openai_image_gen.py --scenes input/scenes-006.yaml --model dall-e-3
+```
+
+### 注意事項
+- **モデルの変更は可能ですが、DALLE3の場合は3x3マトリックス配置や細かな指示がうまく反映されないことが多いです。**
+- **gpt-image-1は高額な課金が発生するため、基本的には本番用・高品質生成用とし、動作確認やテストにはdall-e-3の利用を推奨します。**
+- 本番運用や高品質な画像生成には`gpt-image-1`などの最新モデルを推奨します。
+
+### 設定ファイルの役割
+- `input/global_config.yaml` : 全体の画風や共通条件
+- `input/objects_config.yaml` : キャラクターや小物の詳細説明
+- `input/scenes-XXX.yaml` : シーンごとの構図やセリフ案
+
 --- 
